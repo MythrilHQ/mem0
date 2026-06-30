@@ -3,7 +3,9 @@ uvicorn==0.34.0
 pydantic[email]==2.10.4
 mem0ai>=0.1.48
 python-dotenv==1.2.2
-psycopg>=3.2.8
+# psycopg 3 needs libpq. The python:3.12-slim base has no system libpq, so use
+# the [binary] build which ships a self-contained libpq wheel (psycopg-binary).
+psycopg[binary]>=3.2.8
 psycopg-pool>=3.2.6,<4.0.0
 
 # Bundled LLM/embedder providers. Extend by adding the provider's package
