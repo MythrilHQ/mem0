@@ -1,0 +1,100 @@
+# Production stack for the self-hosted Mem0 server + dashboard.
+#
+#   docker compose -f docker-compose.prod.yaml up -d --build
+#
+# Network topology:
+#   - mem0_backend  (internal: true)  -> postgres <-> server ONLY. No gateway,
+#                                         so the database is unreachable from
+#                                         outside the compose project and is
+#                                         NOT published to the host.
+#   - mem0_frontend (bridge)          -> server <-> dashboard, and provides the
+#                                         server its outbound route to the LLM API.
+#
+# Published host ports (the ONLY two): dashboard 3001, server ${SERVER_PORT:-8888}.
+# Postgres has no `ports:` entry and sits on an internal network — it can only
+# be reached over the docker network by the server container.
+name: mem0
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    shm_size: "128mb"
+    networks:
+      - mem0_backend
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in server/.env}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -d ${POSTGRES_DB:-postgres} -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_db:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    # NOTE: intentionally no `ports:` — postgres is private to mem0_backend.
+
+  mem0:
+    build:
+      context: ..
+      dockerfile: server/prod.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Force the in-cluster DB host regardless of what .env says.
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mem0_backend
+      - mem0_frontend
+    ports:
+      - "${SERVER_PORT:-8888}:8000"
+    volumes:
+      - mem0_history:/app/history
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mem0-dashboard:
+    build:
+      context: ./dashboard
+    restart: unless-stopped
+    networks:
+      - mem0_frontend
+    ports:
+      - "${DASHBOARD_PORT:-3001}:3000"
+    environment:
+      # Browser-facing URL of the server. Must be reachable from the user's
+      # machine (e.g. http://<runner-host>:8888), set via deploy env/secret.
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      # Server-side (container-to-container) calls stay on the docker network.
+      - API_INTERNAL_URL=http://mem0:8000
+      - NEXT_PUBLIC_INSTANCE_NAME=${NEXT_PUBLIC_INSTANCE_NAME:-Mem0}
+    depends_on:
+      mem0:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_db:
+  mem0_history:
+
+networks:
+  mem0_backend:
+    driver: bridge
+    internal: true
+  mem0_frontend:
+    driver: bridge
