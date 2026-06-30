@@ -156,6 +156,37 @@ def _provider_api_key(provider: str) -> Optional[str]:
         "anthropic": ANTHROPIC_API_KEY,
     }.get(provider, OPENAI_API_KEY)
 
+
+_PROVIDER_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
+def _validate_provider_selection() -> None:
+    """Fail fast at startup if a selected provider is not bundled or is missing
+    its API key. Without this, a misconfiguration only surfaces as a confusing
+    crash on the first add/search request instead of at boot."""
+    for kind, env_name, provider, bundled in (
+        ("LLM", "MEM0_LLM_PROVIDER", LLM_PROVIDER, BUNDLED_LLM_PROVIDERS),
+        ("embedder", "MEM0_EMBEDDER_PROVIDER", EMBEDDER_PROVIDER, BUNDLED_EMBEDDER_PROVIDERS),
+    ):
+        if provider not in bundled:
+            raise RuntimeError(
+                f"{kind} provider '{provider}' is not bundled in this image. "
+                f"Set {env_name} to one of: {', '.join(bundled)}."
+            )
+        if not _provider_api_key(provider):
+            key_env = _PROVIDER_KEY_ENV.get(provider, "the provider's API key")
+            raise RuntimeError(
+                f"{kind} provider '{provider}' is selected but {key_env} is not set. "
+                f"Set {key_env} in the environment."
+            )
+
+
+_validate_provider_selection()
+
 DEFAULT_CONFIG = {
     "version": "v1.1",
     "vector_store": {
