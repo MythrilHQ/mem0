@@ -112,9 +112,49 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
 POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# Gemini reads GOOGLE_API_KEY (the google-genai SDK env var); accept GEMINI_API_KEY too.
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
-DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-4.1-nano-2025-04-14")
-DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+
+# Provider selection. Defaults stay on OpenAI for upstream compatibility; set
+# MEM0_LLM_PROVIDER / MEM0_EMBEDDER_PROVIDER (e.g. "gemini") to switch. Must be
+# one of the BUNDLED_* providers below.
+LLM_PROVIDER = os.environ.get("MEM0_LLM_PROVIDER", "openai").lower()
+EMBEDDER_PROVIDER = os.environ.get("MEM0_EMBEDDER_PROVIDER", "openai").lower()
+
+# Sensible per-provider defaults so switching providers doesn't require also
+# pinning a model/dimension by hand. Explicit env vars still win.
+_LLM_MODEL_DEFAULTS = {
+    "openai": "gpt-4.1-nano-2025-04-14",
+    "gemini": "gemini-3.5-flash",
+    "anthropic": "claude-3-5-haiku-latest",
+}
+_EMBEDDER_MODEL_DEFAULTS = {
+    "openai": "text-embedding-3-small",
+    "gemini": "models/gemini-embedding-001",
+}
+# Embedding dimensionality MUST match the pgvector column created on first run.
+_EMBEDDER_DIMS_DEFAULTS = {"openai": 1536, "gemini": 768}
+
+DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL") or _LLM_MODEL_DEFAULTS.get(
+    LLM_PROVIDER, "gpt-4.1-nano-2025-04-14"
+)
+DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL") or _EMBEDDER_MODEL_DEFAULTS.get(
+    EMBEDDER_PROVIDER, "text-embedding-3-small"
+)
+DEFAULT_EMBEDDING_DIMS = int(
+    os.environ.get("MEM0_EMBEDDING_DIMS") or _EMBEDDER_DIMS_DEFAULTS.get(EMBEDDER_PROVIDER, 1536)
+)
+
+
+def _provider_api_key(provider: str) -> Optional[str]:
+    """Map a provider name to its configured API key."""
+    return {
+        "openai": OPENAI_API_KEY,
+        "gemini": GOOGLE_API_KEY,
+        "anthropic": ANTHROPIC_API_KEY,
+    }.get(provider, OPENAI_API_KEY)
 
 DEFAULT_CONFIG = {
     "version": "v1.1",
@@ -127,13 +167,21 @@ DEFAULT_CONFIG = {
             "user": POSTGRES_USER,
             "password": POSTGRES_PASSWORD,
             "collection_name": POSTGRES_COLLECTION_NAME,
+            "embedding_model_dims": DEFAULT_EMBEDDING_DIMS,
         },
     },
     "llm": {
-        "provider": "openai",
-        "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
+        "provider": LLM_PROVIDER,
+        "config": {"api_key": _provider_api_key(LLM_PROVIDER), "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
     },
-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
+    "embedder": {
+        "provider": EMBEDDER_PROVIDER,
+        "config": {
+            "api_key": _provider_api_key(EMBEDDER_PROVIDER),
+            "model": DEFAULT_EMBEDDER_MODEL,
+            "embedding_dims": DEFAULT_EMBEDDING_DIMS,
+        },
+    },
     "history_db_path": HISTORY_DB_PATH,
 }
 
