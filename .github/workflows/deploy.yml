@@ -81,12 +81,11 @@ jobs:
           docker compose -f docker-compose.prod.yaml up -d --build --remove-orphans
           docker image prune -f
 
-      - name: Wait for API health
-        working-directory: server
-        run: |
+          # Wait for the API. /auth/setup-status is the server's lightweight,
+          # pre-auth readiness endpoint (the server has no /api/health route).
           for i in $(seq 1 30); do
             if docker compose -f docker-compose.prod.yaml exec -T mem0 \
-                 curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+                 curl -fsS http://127.0.0.1:8000/auth/setup-status >/dev/null 2>&1; then
               echo "API healthy"
               exit 0
             fi
