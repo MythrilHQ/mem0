@@ -1,0 +1,86 @@
+name: Deploy Mem0 Server
+
+# Builds and (re)deploys the self-hosted Mem0 server + dashboard stack on the
+# self-hosted runner labeled `mem0`. The runner host IS the deployment target.
+# Secrets/config are passed via the job's process environment and interpolated
+# by docker compose at `up` time — nothing sensitive is written to disk.
+
+on:
+  push:
+    branches: [development]
+    paths:
+      - "server/**"
+      - "mem0/**"
+      - "pyproject.toml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+# Never run two deploys against the same host at once; let an in-flight deploy
+# finish rather than cancelling it mid-rollout.
+concurrency:
+  group: deploy-mem0
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy stack
+    runs-on: [self-hosted, mem0]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy compose stack
+        working-directory: server
+        env:
+          # Sensitive — Repository secrets. Passed via the job environment so
+          # nothing is written to the runner's filesystem. Compose interpolates
+          # these into the services' `environment:` blocks at `up` time.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          # Non-sensitive — Repository variables (compose supplies defaults).
+          MEM0_LLM_PROVIDER: ${{ vars.MEM0_LLM_PROVIDER }}
+          MEM0_EMBEDDER_PROVIDER: ${{ vars.MEM0_EMBEDDER_PROVIDER }}
+          MEM0_DEFAULT_LLM_MODEL: ${{ vars.MEM0_DEFAULT_LLM_MODEL }}
+          MEM0_DEFAULT_EMBEDDER_MODEL: ${{ vars.MEM0_DEFAULT_EMBEDDER_MODEL }}
+          MEM0_EMBEDDING_DIMS: ${{ vars.MEM0_EMBEDDING_DIMS }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          AUTH_DISABLED: ${{ vars.AUTH_DISABLED }}
+          NEXT_PUBLIC_INSTANCE_NAME: ${{ vars.NEXT_PUBLIC_INSTANCE_NAME }}
+          # Public hostnames (bare domains) — single source of truth.
+          MEM0_SERVER_HOST: ${{ vars.MEM0_SERVER_HOST }}
+          MEM0_DASHBOARD_HOST: ${{ vars.MEM0_DASHBOARD_HOST }}
+          # Optional explicit URL overrides (default: https://<host>).
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          # Optional Traefik overrides (default to the values in the compose file).
+          TRAEFIK_ENTRYPOINT: ${{ vars.TRAEFIK_ENTRYPOINT }}
+          TRAEFIK_CERTRESOLVER: ${{ vars.TRAEFIK_CERTRESOLVER }}
+          TRAEFIK_MIDDLEWARES: ${{ vars.TRAEFIK_MIDDLEWARES }}
+        run: |
+          # Derive public URLs from the bare hostnames unless explicitly set.
+          export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://${MEM0_SERVER_HOST}}"
+          export DASHBOARD_URL="${DASHBOARD_URL:-https://${MEM0_DASHBOARD_HOST}}"
+          docker compose -f docker-compose.prod.yaml up -d --build --remove-orphans
+          docker image prune -f
+
+      - name: Wait for API health
+        working-directory: server
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.prod.yaml exec -T mem0 \
+                 curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+              echo "API healthy"
+              exit 0
+            fi
+            echo "waiting for API... ($i/30)"
+            sleep 5
+          done
+          echo "::error::API did not become healthy in time"
+          docker compose -f docker-compose.prod.yaml ps
+          docker compose -f docker-compose.prod.yaml logs --tail=80
+          exit 1

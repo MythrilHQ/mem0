@@ -1,0 +1,148 @@
+# Production stack for the self-hosted Mem0 server + dashboard, fronted by an
+# existing Traefik v3 instance (TLS + routing) on the shared `proxy` network.
+#
+#   docker compose -f docker-compose.prod.yaml up -d --build
+#
+# Ingress (handled by Traefik, HTTPS via Cloudflare cert resolver by default).
+# Hostnames and Traefik settings come from the environment (the deploy workflow
+# passes them from GitHub repo variables; locally, a .env file is auto-loaded by
+# compose for interpolation):
+#   - server     -> https://${MEM0_SERVER_HOST}
+#   - dashboard  -> https://${MEM0_DASHBOARD_HOST}
+# Traefik overrides (defaults in parentheses):
+#   TRAEFIK_ENTRYPOINT (websecure), TRAEFIK_CERTRESOLVER (cloudflare),
+#   TRAEFIK_MIDDLEWARES (security-headers@file). The middleware must exist in
+#   your Traefik dynamic config; set TRAEFIK_MIDDLEWARES to "" to disable it.
+#
+# Network topology:
+#   - proxy         (external)        -> Traefik <-> server/dashboard ingress.
+#   - mem0_backend  (internal: true)  -> postgres <-> server ONLY. No gateway,
+#                                        so the DB is unreachable from outside
+#                                        the project and is NOT published to host.
+#   - mem0_frontend (bridge)          -> server <-> dashboard internal API calls,
+#                                        plus the server's outbound route to the LLM API.
+#
+# No service publishes a host port: all external access goes through Traefik.
+# Postgres has no `ports:` entry and sits on an internal-only network.
+name: mem0
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    shm_size: "128mb"
+    networks:
+      - mem0_backend
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in server/.env}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -d ${POSTGRES_DB:-postgres} -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_db:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    # NOTE: intentionally no `ports:` — postgres is private to mem0_backend.
+
+  mem0:
+    build:
+      context: ..
+      dockerfile: server/prod.Dockerfile
+    restart: unless-stopped
+    # No env_file: values are interpolated from the process environment (the
+    # deploy workflow's job env) or a local .env auto-loaded by compose. This
+    # keeps the CI runner from writing any secret file to disk.
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MEM0_LLM_PROVIDER=${MEM0_LLM_PROVIDER:-gemini}
+      - MEM0_EMBEDDER_PROVIDER=${MEM0_EMBEDDER_PROVIDER:-gemini}
+      - MEM0_DEFAULT_LLM_MODEL=${MEM0_DEFAULT_LLM_MODEL:-}
+      - MEM0_DEFAULT_EMBEDDER_MODEL=${MEM0_DEFAULT_EMBEDDER_MODEL:-}
+      - MEM0_EMBEDDING_DIMS=${MEM0_EMBEDDING_DIMS:-}
+      # In-cluster DB host is fixed regardless of any external override.
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      - POSTGRES_COLLECTION_NAME=${POSTGRES_COLLECTION_NAME:-memories}
+      - APP_DB_NAME=${APP_DB_NAME:-mem0_app}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - AUTH_DISABLED=${AUTH_DISABLED:-false}
+      - DASHBOARD_URL=${DASHBOARD_URL:-}
+      - MEM0_TELEMETRY=${MEM0_TELEMETRY:-false}
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mem0_backend
+      - mem0_frontend
+      - proxy
+    volumes:
+      - mem0_history:/app/history
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "traefik.enable=true"
+      # Reach this container over the proxy network (it's on three networks).
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.mem0-server.rule=Host(`${MEM0_SERVER_HOST:?set MEM0_SERVER_HOST}`)"
+      - "traefik.http.routers.mem0-server.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.mem0-server.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.mem0-server.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
+      - "traefik.http.services.mem0-server.loadbalancer.server.port=8000"
+
+  mem0-dashboard:
+    build:
+      context: ./dashboard
+    restart: unless-stopped
+    networks:
+      - mem0_frontend
+      - proxy
+    environment:
+      # Browser-facing URL of the server (cross-origin calls from the dashboard
+      # in the user's browser). Must be the public server domain over HTTPS.
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      # Server-side (container-to-container) calls stay on the docker network.
+      - API_INTERNAL_URL=http://mem0:8000
+      - NEXT_PUBLIC_INSTANCE_NAME=${NEXT_PUBLIC_INSTANCE_NAME:-Mem0}
+    depends_on:
+      mem0:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.mem0-dashboard.rule=Host(`${MEM0_DASHBOARD_HOST:?set MEM0_DASHBOARD_HOST}`)"
+      - "traefik.http.routers.mem0-dashboard.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.mem0-dashboard.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.mem0-dashboard.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
+      - "traefik.http.services.mem0-dashboard.loadbalancer.server.port=3000"
+
+volumes:
+  postgres_db:
+  mem0_history:
+
+networks:
+  # Pre-existing Traefik network (`docker network create proxy`).
+  proxy:
+    external: true
+  mem0_backend:
+    driver: bridge
+    internal: true
+  mem0_frontend:
+    driver: bridge
