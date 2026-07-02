@@ -85,12 +85,38 @@ export default function MemoriesPage() {
         <span className="line-clamp-2 text-sm">{value}</span>
       ),
     },
-    { key: "user_id" as keyof Memory, label: "User", width: 100 },
-    { key: "agent_id" as keyof Memory, label: "Agent", width: 100 },
+    { key: "user_id" as keyof Memory, label: "User", width: 130 },
+    { key: "agent_id" as keyof Memory, label: "Agent", width: 90 },
+    {
+      key: "metadata" as keyof Memory,
+      label: "Category",
+      width: 130,
+      render: (_value: Memory[keyof Memory], row: Memory) => {
+        const category =
+          row.metadata?.category ??
+          (Array.isArray(row.categories) ? row.categories[0] : undefined);
+        return category ? (
+          <span className="text-sm capitalize">
+            {String(category).replace(/_/g, " ")}
+          </span>
+        ) : (
+          "--"
+        );
+      },
+    },
+    {
+      key: "user_id" as keyof Memory,
+      label: "Scope",
+      width: 80,
+      render: (_value: Memory[keyof Memory], row: Memory) =>
+        row.metadata?.scope === "author" || row.user_id?.endsWith("::__author__")
+          ? "Author"
+          : "Project",
+    },
     {
       key: "created_at" as keyof Memory,
       label: "Created",
-      width: 120,
+      width: 110,
       render: (value: string) =>
         value ? format(new Date(value), "MMM d, yyyy") : "--",
     },
@@ -238,6 +264,32 @@ export default function MemoriesPage() {
                     <p className="text-sm">{selectedMemory.agent_id}</p>
                   </div>
                 )}
+                {(selectedMemory.metadata?.category ||
+                  (Array.isArray(selectedMemory.categories) &&
+                    selectedMemory.categories.length > 0)) && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Category
+                    </Label>
+                    <p className="text-sm capitalize">
+                      {String(
+                        selectedMemory.metadata?.category ??
+                          selectedMemory.categories?.[0],
+                      ).replace(/_/g, " ")}
+                    </p>
+                  </div>
+                )}
+                <div className="space-y-1">
+                  <Label className="text-xs text-onSurface-default-tertiary">
+                    Scope
+                  </Label>
+                  <p className="text-sm">
+                    {selectedMemory.metadata?.scope === "author" ||
+                    selectedMemory.user_id?.endsWith("::__author__")
+                      ? "Author"
+                      : "Project"}
+                  </p>
+                </div>
                 {selectedMemory.created_at && (
                   <div className="space-y-1">
                     <Label className="text-xs text-onSurface-default-tertiary">
