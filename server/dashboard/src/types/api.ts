@@ -5,7 +5,7 @@ export interface Memory {
   agent_id?: string;
   created_at?: string;
   updated_at?: string;
-  metadata?: { category?: string | null; scope?: string | null } | null;
+  metadata?: { category?: string | null; scope?: string | null; aspect?: string | null; timesObserved?: number | null } | null;
   categories?: string[] | null;
 }
 

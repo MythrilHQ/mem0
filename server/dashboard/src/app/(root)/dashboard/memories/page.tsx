@@ -114,6 +114,24 @@ export default function MemoriesPage() {
           : "Project",
     },
     {
+      key: "metadata" as keyof Memory,
+      label: "Aspect",
+      width: 110,
+      render: (_value: Memory[keyof Memory], row: Memory) =>
+        row.metadata?.aspect ? (
+          <span className="text-sm capitalize">{String(row.metadata.aspect).replace(/_/g, " ")}</span>
+        ) : (
+          "--"
+        ),
+    },
+    {
+      key: "metadata" as keyof Memory,
+      label: "Seen",
+      width: 60,
+      render: (_value: Memory[keyof Memory], row: Memory) =>
+        typeof row.metadata?.timesObserved === "number" ? `${row.metadata.timesObserved}×` : "--",
+    },
+    {
       key: "created_at" as keyof Memory,
       label: "Created",
       width: 110,
@@ -290,6 +308,24 @@ export default function MemoriesPage() {
                       : "Project"}
                   </p>
                 </div>
+                {selectedMemory.metadata?.aspect && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Aspect
+                    </Label>
+                    <p className="text-sm capitalize">
+                      {String(selectedMemory.metadata.aspect).replace(/_/g, " ")}
+                    </p>
+                  </div>
+                )}
+                {typeof selectedMemory.metadata?.timesObserved === "number" && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Times observed
+                    </Label>
+                    <p className="text-sm">{selectedMemory.metadata.timesObserved}</p>
+                  </div>
+                )}
                 {selectedMemory.created_at && (
                   <div className="space-y-1">
                     <Label className="text-xs text-onSurface-default-tertiary">
