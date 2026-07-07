@@ -1,12 +1,20 @@
-# Production stack for the self-hosted Mem0 server + dashboard, fronted by an
+# Deployable stack for the self-hosted Mem0 server + dashboard, fronted by an
 # existing Traefik v3 instance (TLS + routing) on the shared `proxy` network.
 #
 #   docker compose -f docker-compose.prod.yaml up -d --build
 #
+# MULTI-ENVIRONMENT: this one file serves every environment (dev, staging, ...).
+# MEM0_STACK_NAME namespaces everything so environments run side by side on the
+# same host without colliding:
+#   - compose project name  -> unique containers, networks, and volumes
+#   - Traefik router/service names -> globally unique in Traefik
+# Set MEM0_STACK_NAME per environment (e.g. `mem0` for dev, `mem0-staging` for
+# staging). Defaults to `mem0`.
+#
 # Ingress (handled by Traefik, HTTPS via Cloudflare cert resolver by default).
 # Hostnames and Traefik settings come from the environment (the deploy workflow
-# passes them from GitHub repo variables; locally, a .env file is auto-loaded by
-# compose for interpolation):
+# passes them from GitHub environment/repo variables; locally, a .env file is
+# auto-loaded by compose for interpolation):
 #   - server     -> https://${MEM0_SERVER_HOST}
 #   - dashboard  -> https://${MEM0_DASHBOARD_HOST}
 # Traefik overrides (defaults in parentheses):
@@ -14,7 +22,8 @@
 #   TRAEFIK_MIDDLEWARES (security-headers@file). The middleware must exist in
 #   your Traefik dynamic config; set TRAEFIK_MIDDLEWARES to "" to disable it.
 #
-# Network topology:
+# Network topology (all networks except `proxy` are per-project, so staging and
+# dev are fully isolated):
 #   - proxy         (external)        -> Traefik <-> server/dashboard ingress.
 #   - mem0_backend  (internal: true)  -> postgres <-> server ONLY. No gateway,
 #                                        so the DB is unreachable from outside
@@ -24,7 +33,7 @@
 #
 # No service publishes a host port: all external access goes through Traefik.
 # Postgres has no `ports:` entry and sits on an internal-only network.
-name: mem0
+name: ${MEM0_STACK_NAME:-mem0}
 
 services:
   postgres:
@@ -79,9 +88,15 @@ services:
       - MEM0_TELEMETRY=${MEM0_TELEMETRY:-false}
       - PYTHONUNBUFFERED=1
     networks:
-      - mem0_backend
-      - mem0_frontend
-      - proxy
+      mem0_backend: {}
+      # Project-scoped alias for dashboard->server internal calls. The default
+      # service alias `mem0` also lands on the shared `proxy` network, where it
+      # would be ambiguous across stacks; `mem0-internal` lives only on this
+      # project's mem0_frontend, so it always resolves to THIS stack's server.
+      mem0_frontend:
+        aliases:
+          - mem0-internal
+      proxy: {}
     volumes:
       - mem0_history:/app/history
     depends_on:
@@ -96,11 +111,11 @@ services:
       - "traefik.enable=true"
       # Reach this container over the proxy network (it's on three networks).
       - "traefik.docker.network=proxy"
-      - "traefik.http.routers.mem0-server.rule=Host(`${MEM0_SERVER_HOST:?set MEM0_SERVER_HOST}`)"
-      - "traefik.http.routers.mem0-server.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.mem0-server.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
-      - "traefik.http.routers.mem0-server.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
-      - "traefik.http.services.mem0-server.loadbalancer.server.port=8000"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.rule=Host(`${MEM0_SERVER_HOST:?set MEM0_SERVER_HOST}`)"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
+      - "traefik.http.services.${MEM0_STACK_NAME:-mem0}-server.loadbalancer.server.port=8000"
 
   mem0-dashboard:
     build:
@@ -113,8 +128,9 @@ services:
       # Browser-facing URL of the server (cross-origin calls from the dashboard
       # in the user's browser). Must be the public server domain over HTTPS.
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-      # Server-side (container-to-container) calls stay on the docker network.
-      - API_INTERNAL_URL=http://mem0:8000
+      # Server-side (container-to-container) calls use the project-scoped alias
+      # so staging never talks to dev's server (see the mem0 service aliases).
+      - API_INTERNAL_URL=http://mem0-internal:8000
       - NEXT_PUBLIC_INSTANCE_NAME=${NEXT_PUBLIC_INSTANCE_NAME:-Mem0}
     depends_on:
       mem0:
@@ -127,11 +143,11 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
-      - "traefik.http.routers.mem0-dashboard.rule=Host(`${MEM0_DASHBOARD_HOST:?set MEM0_DASHBOARD_HOST}`)"
-      - "traefik.http.routers.mem0-dashboard.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.mem0-dashboard.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
-      - "traefik.http.routers.mem0-dashboard.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
-      - "traefik.http.services.mem0-dashboard.loadbalancer.server.port=3000"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.rule=Host(`${MEM0_DASHBOARD_HOST:?set MEM0_DASHBOARD_HOST}`)"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
+      - "traefik.http.services.${MEM0_STACK_NAME:-mem0}-dashboard.loadbalancer.server.port=3000"
 
 volumes:
   postgres_db:
