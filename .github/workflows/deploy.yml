@@ -3,7 +3,7 @@ name: Deploy Mem0 Server
 # Builds and (re)deploys the self-hosted Mem0 server + dashboard stack on the
 # self-hosted runner labeled `mem0`. The runner host IS the deployment target.
 # Secrets/config are passed via the job's process environment and interpolated
-# by docker compose at `up` time — nothing sensitive is written to disk.
+# by docker compose at `up` time - nothing sensitive is written to disk.
 
 on:
   push:
