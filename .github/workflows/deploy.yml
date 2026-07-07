@@ -7,7 +7,7 @@ name: Deploy Mem0 Server
 
 on:
   push:
-    branches: [development]
+    branches: [development, staging]
     paths:
       - "server/**"
       - "mem0/**"
@@ -15,16 +15,20 @@ on:
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
-# Never run two deploys against the same host at once; let an in-flight deploy
-# finish rather than cancelling it mid-rollout.
+# One in-flight deploy per environment (branch); different environments can
+# deploy in parallel since they're isolated stacks.
 concurrency:
-  group: deploy-mem0
+  group: deploy-mem0-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     name: Build & deploy stack
     runs-on: [self-hosted, mem0]
+    # GitHub Environment matching the branch (development / staging). Environment
+    # variables and secrets scope the deploy per environment; repo-level ones
+    # apply as a fallback where an environment doesn't override them.
+    environment: ${{ github.ref_name }}
 
     steps:
       - name: Checkout
@@ -42,7 +46,8 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
-          # Non-sensitive — Repository variables (compose supplies defaults).
+          # Non-sensitive — Repository/environment variables (compose supplies defaults).
+          MEM0_STACK_NAME: ${{ vars.MEM0_STACK_NAME }}
           MEM0_LLM_PROVIDER: ${{ vars.MEM0_LLM_PROVIDER }}
           MEM0_EMBEDDER_PROVIDER: ${{ vars.MEM0_EMBEDDER_PROVIDER }}
           MEM0_DEFAULT_LLM_MODEL: ${{ vars.MEM0_DEFAULT_LLM_MODEL }}
