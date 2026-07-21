@@ -1,7 +1,10 @@
-# Deployable stack for the self-hosted Mem0 server + dashboard, fronted by an
-# existing Traefik v3 instance (TLS + routing) on the shared `proxy` network.
+# Deployable stack for the self-hosted Mem0 server + dashboard, fronted by the
+# host Traefik v3 container on the shared `proxy` network. The EC2 bootstrap
+# installs that standalone proxy from traefik/; the GitHub runner deploys each
+# Mem0 environment independently.
 #
-#   docker compose -f docker-compose.prod.yaml up -d --build
+#   docker compose -f docker-compose.prod.yaml build --no-cache --pull
+#   docker compose -f docker-compose.prod.yaml up -d --no-build
 #
 # MULTI-ENVIRONMENT: this one file serves every environment (dev, staging, ...).
 # MEM0_STACK_NAME namespaces everything so environments run side by side on the
@@ -11,16 +14,17 @@
 # Set MEM0_STACK_NAME per environment (e.g. `mem0` for dev, `mem0-staging` for
 # staging). Defaults to `mem0`.
 #
-# Ingress (handled by Traefik, HTTPS via Cloudflare cert resolver by default).
+# Ingress (handled by Traefik, HTTPS via Let's Encrypt HTTP-01 by default).
 # Hostnames and Traefik settings come from the environment (the deploy workflow
 # passes them from GitHub environment/repo variables; locally, a .env file is
 # auto-loaded by compose for interpolation):
 #   - server     -> https://${MEM0_SERVER_HOST}
 #   - dashboard  -> https://${MEM0_DASHBOARD_HOST}
 # Traefik overrides (defaults in parentheses):
-#   TRAEFIK_ENTRYPOINT (websecure), TRAEFIK_CERTRESOLVER (cloudflare),
-#   TRAEFIK_MIDDLEWARES (security-headers@file). The middleware must exist in
-#   your Traefik dynamic config; set TRAEFIK_MIDDLEWARES to "" to disable it.
+#   TRAEFIK_ENTRYPOINT (websecure), TRAEFIK_CERTRESOLVER (letsencrypt),
+#   TRAEFIK_MIDDLEWARES (security-headers@file). The default middleware is
+#   tracked in traefik/dynamic/security.yml; set TRAEFIK_MIDDLEWARES to "" to
+#   disable it.
 #
 # Network topology (all networks except `proxy` are per-project, so staging and
 # dev are fully isolated):
@@ -60,6 +64,9 @@ services:
     build:
       context: ..
       dockerfile: server/prod.Dockerfile
+      labels:
+        - "ai.mem0.deployment.project=${MEM0_STACK_NAME:-mem0}"
+        - "ai.mem0.deployment.service=mem0"
     restart: unless-stopped
     # No env_file: values are interpolated from the process environment (the
     # deploy workflow's job env) or a local .env auto-loaded by compose. This
@@ -84,6 +91,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - AUTH_DISABLED=${AUTH_DISABLED:-false}
+      - ENABLE_API_DOCS=${ENABLE_API_DOCS:-false}
       - DASHBOARD_URL=${DASHBOARD_URL:-}
       - MEM0_TELEMETRY=${MEM0_TELEMETRY:-false}
       - PYTHONUNBUFFERED=1
@@ -113,13 +121,16 @@ services:
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.rule=Host(`${MEM0_SERVER_HOST:?set MEM0_SERVER_HOST}`)"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-server.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
       - "traefik.http.services.${MEM0_STACK_NAME:-mem0}-server.loadbalancer.server.port=8000"
 
   mem0-dashboard:
     build:
       context: ./dashboard
+      labels:
+        - "ai.mem0.deployment.project=${MEM0_STACK_NAME:-mem0}"
+        - "ai.mem0.deployment.service=mem0-dashboard"
     restart: unless-stopped
     networks:
       - mem0_frontend
@@ -145,7 +156,7 @@ services:
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.rule=Host(`${MEM0_DASHBOARD_HOST:?set MEM0_DASHBOARD_HOST}`)"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.tls.certresolver=${TRAEFIK_CERTRESOLVER:-cloudflare}"
+      - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.routers.${MEM0_STACK_NAME:-mem0}-dashboard.middlewares=${TRAEFIK_MIDDLEWARES:-security-headers@file}"
       - "traefik.http.services.${MEM0_STACK_NAME:-mem0}-dashboard.loadbalancer.server.port=3000"
 
@@ -154,7 +165,7 @@ volumes:
   mem0_history:
 
 networks:
-  # Pre-existing Traefik network (`docker network create proxy`).
+  # Created by the standalone traefik/compose.yaml host project.
   proxy:
     external: true
   mem0_backend:

@@ -1,0 +1,65 @@
+# Standalone Dockerized Traefik v3 ingress for the deployment host.
+#
+# Copy this entire directory to /opt/traefik on the host, create .env from
+# .env.example, and run:
+#   docker compose --env-file .env -f compose.yaml up -d
+#
+# The application runner later connects deployment containers to the named
+# `proxy` network created by this project.
+name: host-traefik
+
+services:
+  traefik:
+    image: traefik:${TRAEFIK_IMAGE_TAG:?Set TRAEFIK_IMAGE_TAG in .env}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --api.dashboard=false
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --accesslog=true
+      - --ping=true
+      - --ping.entrypoint=traefik
+      - --entrypoints.traefik.address=:8080
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.websecure.address=:443
+      - --providers.docker=true
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/letsencrypt
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  traefik_acme:
+
+networks:
+  proxy:
+    name: proxy

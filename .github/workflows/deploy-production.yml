@@ -1,34 +1,23 @@
-name: Deploy Mem0 Server
+name: Deploy Mem0 Production
 
-# Builds and (re)deploys the self-hosted Mem0 server + dashboard stack on the
-# self-hosted runner labeled `mem0`. The runner host IS the deployment target.
-# Secrets/config are passed via the job's process environment and interpolated
-# by Docker Compose at deploy time — nothing sensitive is written to disk.
+# Builds and deploys the production self-hosted Mem0 server + dashboard stack.
+# The self-hosted runner labeled `mem0-prod` is the deployment target.
+# Secrets/config are passed through the job environment and interpolated by
+# Docker Compose at deploy time; the workflow does not write a secrets file.
 
 on:
   push:
-    branches: [development, staging]
-    paths:
-      - "server/**"
-      - "mem0/**"
-      - "pyproject.toml"
-      - ".github/workflows/deploy.yml"
-  workflow_dispatch:
+    branches: [production]
 
-# One in-flight deploy per environment (branch); different environments can
-# deploy in parallel since they're isolated stacks.
 concurrency:
-  group: deploy-mem0-${{ github.ref_name }}
+  group: deploy-mem0-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build & deploy stack
-    runs-on: [self-hosted, mem0]
-    # GitHub Environment matching the branch (development / staging). Environment
-    # variables and secrets scope the deploy per environment; repo-level ones
-    # apply as a fallback where an environment doesn't override them.
-    environment: ${{ github.ref_name }}
+    name: Build & deploy production stack
+    runs-on: [self-hosted, mem0-prod]
+    environment: production
 
     steps:
       - name: Checkout
@@ -37,16 +26,14 @@ jobs:
       - name: Deploy compose stack
         working-directory: server
         env:
-          # Sensitive — Repository secrets. Passed via the job environment so
-          # nothing is written to the runner's filesystem. Compose interpolates
-          # these into the services' `environment:` blocks at `up` time.
+          # Sensitive production environment secrets.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
-          # Non-sensitive — Repository/environment variables (compose supplies defaults).
+          # Non-sensitive production environment variables.
           MEM0_STACK_NAME: ${{ vars.MEM0_STACK_NAME }}
           MEM0_LLM_PROVIDER: ${{ vars.MEM0_LLM_PROVIDER }}
           MEM0_EMBEDDER_PROVIDER: ${{ vars.MEM0_EMBEDDER_PROVIDER }}
@@ -63,12 +50,11 @@ jobs:
           # Optional explicit URL overrides (default: https://<host>).
           NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
-          # Optional Traefik overrides (default to the values in the compose file).
+          # Optional Traefik overrides (defaults come from production Compose).
           TRAEFIK_ENTRYPOINT: ${{ vars.TRAEFIK_ENTRYPOINT }}
           TRAEFIK_CERTRESOLVER: ${{ vars.TRAEFIK_CERTRESOLVER }}
           TRAEFIK_MIDDLEWARES: ${{ vars.TRAEFIK_MIDDLEWARES }}
         run: |
-          # Preflight: required config must be present, with actionable errors.
           missing=""
           [ -n "$MEM0_STACK_NAME" ]     || missing="$missing MEM0_STACK_NAME(variable)"
           [ -n "$MEM0_SERVER_HOST" ]    || missing="$missing MEM0_SERVER_HOST(variable)"
@@ -77,11 +63,12 @@ jobs:
           [ -n "$POSTGRES_PASSWORD" ]   || missing="$missing POSTGRES_PASSWORD(secret)"
           [ -n "$JWT_SECRET" ]          || missing="$missing JWT_SECRET(secret)"
           if [ -n "$missing" ]; then
-            echo "::error::Missing required config:${missing}."
-            echo "::error::Set them under Settings > Secrets and variables > Actions."
-            echo "::error::Items marked (variable) go on the Variables tab; (secret) on the Secrets tab."
+            echo "::error::Missing required production config:${missing}."
+            echo "::error::Set these values in the production GitHub Environment."
+            echo "::error::Items marked (variable) belong on Variables; (secret) on Secrets."
             exit 1
           fi
+
           # Resolve the stack name once so image labels and cleanup use the same value.
           export MEM0_STACK_NAME="${MEM0_STACK_NAME:-mem0}"
           export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://${MEM0_SERVER_HOST}}"
@@ -100,12 +87,12 @@ jobs:
               healthy=true
               break
             fi
-            echo "waiting for API... ($i/30)"
+            echo "waiting for production API... ($i/30)"
             sleep 5
           done
 
           if [ "$healthy" != "true" ]; then
-            echo "::error::API did not become healthy in time"
+            echo "::error::Production API did not become healthy in time"
             docker compose -f docker-compose.prod.yaml ps
             docker compose -f docker-compose.prod.yaml logs --tail=80
             exit 1
@@ -115,4 +102,4 @@ jobs:
           # build label restricts cleanup to images produced by this stack.
           docker image prune -f \
             --filter "label=ai.mem0.deployment.project=${MEM0_STACK_NAME}"
-          echo "API healthy"
+          echo "Production API healthy"
