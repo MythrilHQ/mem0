@@ -2,11 +2,33 @@
 
 Mem0 ships a self-hosted FastAPI server plus a local dashboard. It is secure by default, supports dashboard login and API keys, and exposes OpenAPI docs at `/docs`.
 
+> **Provisioning a new host?** Follow the [EC2 Docker host bootstrap cookbook](./EC2_HOST_BOOTSTRAP.md) to install and harden Ubuntu, Docker, Dockerized Traefik v3, and the self-hosted GitHub Actions runner. The runner performs all Mem0 checkout and deployment work.
+
 > **Upgrading?** The Postgres image changed from the archived `ankane/pgvector:v0.5.1`
 > to the official `pgvector/pgvector:pg17`, and `POSTGRES_PASSWORD` is now a required
 > env var. If you have an existing install, see
 > [Migrating from ankane/pgvector to pgvector/pgvector](#migrating-from-ankanepgvector-to-pgvectorpgvector)
 > before running `docker compose up`.
+
+## Production ingress (Dockerized Traefik v3)
+
+`server/traefik/` is a standalone Compose project for the host proxy. Copy only that directory to `/opt/traefik`; do not clone or manually deploy Mem0 as part of server bootstrap.
+
+```bash
+# From the operator workstation:
+scp -r server/traefik ubuntu@ELASTIC_IP:/tmp/traefik
+
+# On the server:
+sudo install -d -m 0750 /opt/traefik
+sudo rsync -a /tmp/traefik/ /opt/traefik/
+sudo cp /opt/traefik/.env.example /opt/traefik/.env
+sudo chmod 600 /opt/traefik/.env
+sudoedit /opt/traefik/.env
+cd /opt/traefik
+sudo docker compose --env-file .env -f compose.yaml up -d
+```
+
+Traefik creates the shared `proxy` network and obtains certificates through token-free Let's Encrypt HTTP-01; DNS records are managed manually and port 80 must remain public. The GitHub runner later checks out and deploys Mem0 or other product stacks onto that network. See the [EC2 Docker host bootstrap cookbook](./EC2_HOST_BOOTSTRAP.md) for the complete host and runner setup.
 
 ## Quick Start
 
