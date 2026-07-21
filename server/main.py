@@ -69,7 +69,7 @@ def _env_flag(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-ENABLE_API_DOCS = _env_flag("ENABLE_API_DOCS", True)
+ENABLE_API_DOCS = _env_flag("ENABLE_API_DOCS", False)
 
 
 def _warn_if_unconfigured() -> None:
