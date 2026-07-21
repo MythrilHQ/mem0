@@ -42,6 +42,7 @@ jobs:
           MEM0_EMBEDDING_DIMS: ${{ vars.MEM0_EMBEDDING_DIMS }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER }}
           AUTH_DISABLED: ${{ vars.AUTH_DISABLED }}
+          ENABLE_API_DOCS: ${{ vars.ENABLE_API_DOCS || 'false' }}
           NEXT_PUBLIC_INSTANCE_NAME: ${{ vars.NEXT_PUBLIC_INSTANCE_NAME }}
           # Public hostnames (bare domains) — single source of truth.
           MEM0_SERVER_HOST: ${{ vars.MEM0_SERVER_HOST }}
