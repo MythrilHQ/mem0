@@ -3,7 +3,8 @@
 # installs that standalone proxy from traefik/; the GitHub runner deploys each
 # Mem0 environment independently.
 #
-#   docker compose -f docker-compose.prod.yaml up -d --build
+#   docker compose -f docker-compose.prod.yaml build --no-cache --pull
+#   docker compose -f docker-compose.prod.yaml up -d --no-build
 #
 # MULTI-ENVIRONMENT: this one file serves every environment (dev, staging, ...).
 # MEM0_STACK_NAME namespaces everything so environments run side by side on the
@@ -63,6 +64,9 @@ services:
     build:
       context: ..
       dockerfile: server/prod.Dockerfile
+      labels:
+        - "ai.mem0.deployment.project=${MEM0_STACK_NAME:-mem0}"
+        - "ai.mem0.deployment.service=mem0"
     restart: unless-stopped
     # No env_file: values are interpolated from the process environment (the
     # deploy workflow's job env) or a local .env auto-loaded by compose. This
@@ -123,6 +127,9 @@ services:
   mem0-dashboard:
     build:
       context: ./dashboard
+      labels:
+        - "ai.mem0.deployment.project=${MEM0_STACK_NAME:-mem0}"
+        - "ai.mem0.deployment.service=mem0-dashboard"
     restart: unless-stopped
     networks:
       - mem0_frontend

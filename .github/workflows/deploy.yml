@@ -3,7 +3,7 @@ name: Deploy Mem0 Server
 # Builds and (re)deploys the self-hosted Mem0 server + dashboard stack on the
 # self-hosted runner labeled `mem0`. The runner host IS the deployment target.
 # Secrets/config are passed via the job's process environment and interpolated
-# by docker compose at `up` time — nothing sensitive is written to disk.
+# by Docker Compose at deploy time — nothing sensitive is written to disk.
 
 on:
   push:
@@ -69,6 +69,7 @@ jobs:
         run: |
           # Preflight: required config must be present, with actionable errors.
           missing=""
+          [ -n "$MEM0_STACK_NAME" ]     || missing="$missing MEM0_STACK_NAME(variable)"
           [ -n "$MEM0_SERVER_HOST" ]    || missing="$missing MEM0_SERVER_HOST(variable)"
           [ -n "$MEM0_DASHBOARD_HOST" ] || missing="$missing MEM0_DASHBOARD_HOST(variable)"
           [ -n "$GOOGLE_API_KEY" ]      || missing="$missing GOOGLE_API_KEY(secret)"
@@ -80,24 +81,37 @@ jobs:
             echo "::error::Items marked (variable) go on the Variables tab; (secret) on the Secrets tab."
             exit 1
           fi
-          # Derive public URLs from the bare hostnames unless explicitly set.
+          # Resolve the stack name once so image labels and cleanup use the same value.
+          export MEM0_STACK_NAME="${MEM0_STACK_NAME:-mem0}"
           export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://${MEM0_SERVER_HOST}}"
           export DASHBOARD_URL="${DASHBOARD_URL:-https://${MEM0_DASHBOARD_HOST}}"
-          docker compose -f docker-compose.prod.yaml up -d --build --remove-orphans
-          docker image prune -f
+
+          # Always rebuild local images from scratch and refresh base images.
+          docker compose -f docker-compose.prod.yaml build --no-cache --pull
+          docker compose -f docker-compose.prod.yaml up -d --no-build --remove-orphans
 
           # Wait for the API. /auth/setup-status is the server's lightweight,
           # pre-auth readiness endpoint (the server has no /api/health route).
+          healthy=false
           for i in $(seq 1 30); do
             if docker compose -f docker-compose.prod.yaml exec -T mem0 \
                  curl -fsS http://127.0.0.1:8000/auth/setup-status >/dev/null 2>&1; then
-              echo "API healthy"
-              exit 0
+              healthy=true
+              break
             fi
             echo "waiting for API... ($i/30)"
             sleep 5
           done
-          echo "::error::API did not become healthy in time"
-          docker compose -f docker-compose.prod.yaml ps
-          docker compose -f docker-compose.prod.yaml logs --tail=80
-          exit 1
+
+          if [ "$healthy" != "true" ]; then
+            echo "::error::API did not become healthy in time"
+            docker compose -f docker-compose.prod.yaml ps
+            docker compose -f docker-compose.prod.yaml logs --tail=80
+            exit 1
+          fi
+
+          # Without -a, image prune removes only unused dangling images. The
+          # build label restricts cleanup to images produced by this stack.
+          docker image prune -f \
+            --filter "label=ai.mem0.deployment.project=${MEM0_STACK_NAME}"
+          echo "API healthy"
