@@ -62,6 +62,16 @@ BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini")
 BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini")
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+ENABLE_API_DOCS = _env_flag("ENABLE_API_DOCS", True)
+
+
 def _warn_if_unconfigured() -> None:
     """Pre-auth deployments upgrading into this build will 401 everywhere until
     an admin key or admin user exists. Surface the fix before the support tickets."""
@@ -230,6 +240,9 @@ app = FastAPI(
         "or the legacy `ADMIN_API_KEY` environment variable. Set `AUTH_DISABLED=true` for local development only."
     ),
     version="1.0.0",
+    docs_url="/docs" if ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_API_DOCS else None,
     redirect_slashes=False,
 )
 app.state.limiter = limiter
@@ -632,7 +645,9 @@ def reset_memory(_auth=Depends(require_admin)):
         raise upstream_error()
 
 
-@app.get("/", summary="Redirect to the OpenAPI documentation", include_in_schema=False)
+@app.get("/", summary="Server root", include_in_schema=False)
 def home():
-    """Redirect to the OpenAPI documentation."""
-    return RedirectResponse(url="/docs")
+    """Redirect to API docs when enabled; otherwise return a minimal status."""
+    if ENABLE_API_DOCS:
+        return RedirectResponse(url="/docs")
+    return JSONResponse(content={"status": "ok"})

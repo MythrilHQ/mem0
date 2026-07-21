@@ -50,9 +50,38 @@ def _load_app(env_overrides: dict):
     """Reload server/main.py with the given environment and return the FastAPI app."""
     import server.main as server_main
 
-    with patch.dict(os.environ, env_overrides, clear=False):
+    env = {"ENABLE_API_DOCS": "true", **env_overrides}
+    with patch.dict(os.environ, env, clear=False):
         importlib.reload(server_main)
     return server_main.app
+
+
+# ---------------------------------------------------------------------------
+# API documentation configuration
+# ---------------------------------------------------------------------------
+
+class TestApiDocsConfiguration:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _mock_memory):
+        self.mock = _mock_memory
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+    def test_docs_endpoints_are_available_when_enabled(self, path):
+        app = _load_app({"ADMIN_API_KEY": "", "ENABLE_API_DOCS": "true"})
+        response = TestClient(app).get(path)
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+    def test_docs_endpoints_return_404_when_disabled(self, path):
+        app = _load_app({"ADMIN_API_KEY": "", "ENABLE_API_DOCS": "false"})
+        response = TestClient(app).get(path)
+        assert response.status_code == 404
+
+    def test_root_does_not_redirect_to_disabled_docs(self):
+        app = _load_app({"ADMIN_API_KEY": "", "ENABLE_API_DOCS": "false"})
+        response = TestClient(app).get("/", follow_redirects=False)
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
