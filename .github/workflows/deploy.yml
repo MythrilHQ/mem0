@@ -7,7 +7,7 @@ name: Deploy Mem0 Server
 
 on:
   push:
-    branches: [development, staging]
+    branches: [development, staging, wander-development]
     paths:
       - "server/**"
       - "mem0/**"
@@ -25,8 +25,8 @@ jobs:
   deploy:
     name: Build & deploy stack
     runs-on: [self-hosted, mem0-dev]
-    # GitHub Environment matching the branch (development / staging). Environment
-    # variables and secrets scope the deploy per environment; repo-level ones
+    # GitHub Environment matching the branch (development / staging / wander-development).
+    # Environment variables and secrets scope the deploy per environment; repo-level ones
     # apply as a fallback where an environment doesn't override them.
     environment: ${{ github.ref_name }}
 
